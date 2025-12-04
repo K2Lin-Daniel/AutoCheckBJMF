@@ -7,29 +7,30 @@ import sys
 import os
 import schedule
 from datetime import datetime, timedelta
-from core import ConfigManager, CheckInManager
 import multiprocessing
+
+# ==========================================
+# 修复 1: 必须在顶层尽早执行，防止子进程因无控制台崩溃
+# ==========================================
+if getattr(sys, 'frozen', False):
+    # 这里的 os.devnull 相当于丢弃所有输出，防止报错
+    # 这一步必须在任何可能产生 print 的代码之前
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, 'w')
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, 'w')
+
+from core import ConfigManager, CheckInManager
 
 """
 Modern GUI module for AutoCheckBJMF using Flet.
 Implements Material Design 3 style visuals.
 """
 
-# Determine log path based on execution environment
-if getattr(sys, 'frozen', False):
-    base_dir = os.path.dirname(sys.executable)
-else:
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-
-log_path = os.path.join(base_dir, 'gui_flet_debug.log')
-
-# Configure logging
-logging.basicConfig(
-    filename=log_path,
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    force=True
-)
+# ==========================================
+# 修复 2: 不要在顶层调用 basicConfig
+# ==========================================
+# 仅仅初始化 logger 对象是可以的
 logger = logging.getLogger("GUI_FLET")
 
 # Translations
@@ -967,18 +968,31 @@ def main(page: ft.Page):
     AutoCheckApp(page)
 
 if __name__ == "__main__":
-# 1. 必须放在最第一行，用于支持 PyInstaller 的多进程打包
+    # 1. 必须是第一句，用于支持 PyInstaller 的多进程打包
     multiprocessing.freeze_support()
 
-    # 2. 关键修复：在 --noconsole 模式下，sys.stdout 和 sys.stderr 是 None。
-    # 任何库如果尝试 print() 都会导致程序崩溃并引发无限重启。
-    # 我们将它们重定向到 os.devnull (相当于丢弃输出) 或者一个日志文件。
+    # Determine log path based on execution environment
     if getattr(sys, 'frozen', False):
-        # 仅在打包后执行此操作
-        if sys.stdout is None:
-            sys.stdout = open(os.devnull, 'w')
-        if sys.stderr is None:
-            sys.stderr = open(os.devnull, 'w')
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+    log_path = os.path.join(base_dir, 'gui_flet_debug.log')
+
+    # 2. 在这里(仅主进程)配置日志，避免子进程争抢文件锁
+    logging.basicConfig(
+        filename=log_path,
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        force=True
+    )
+
+    # 记录一下启动信息，确保存活
+    logging.info("Application starting...")
 
     # 3. 启动 Flet 应用
-    ft.app(target=main)
+    try:
+        ft.app(target=main)
+    except Exception as e:
+        # 捕获致命错误写入日志
+        logging.critical(f"Critical Error: {e}")
+        logging.critical(traceback.format_exc())
