@@ -547,4 +547,5 @@ def main(page: ft.Page):
     # Start scheduler after UI is built
     threading.Thread(target=scheduler_loop, daemon=True).start()
 
-ft.app(target=main)
+if __name__ == "__main__":
+    ft.app(target=main)
