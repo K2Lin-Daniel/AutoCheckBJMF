@@ -3,7 +3,22 @@ import schedule
 import time
 import os
 
+"""
+CLI entry point for AutoCheckBJMF.
+
+This module provides a command-line interface for running the check-in process.
+It handles initial configuration for new users and executes the scheduled or manual check-in tasks.
+"""
+
 def main():
+    """
+    Main entry point for the CLI application.
+
+    Checks for existing configuration. If not found (and configLock is False),
+    it prompts the user for initial setup (single account, single location).
+    Then it initializes the CheckInManager and either runs a one-time check-in
+    or starts the scheduler based on the configuration.
+    """
     print("----------提醒----------")
     print("项目地址：https://github.com/JasonYANG170/AutoCheckBJMF")
     print("请查看教程以获取Cookie和班级ID")
