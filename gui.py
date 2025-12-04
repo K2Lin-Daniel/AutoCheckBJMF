@@ -1,283 +1,156 @@
-import flet as ft
+import tkinter as tk
+from tkinter import ttk, messagebox, scrolledtext, simpledialog
 import threading
 import time
 import logging
 import traceback
-import multiprocessing
-import schedule
 import sys
 import os
+import schedule
 from datetime import datetime, timedelta
 from core import ConfigManager, CheckInManager
 
 """
-GUI module for AutoCheckBJMF.
+Tkinter GUI module for AutoCheckBJMF.
 
-This module provides a graphical user interface using the Flet framework
-to manage configuration (accounts, locations, tasks) and monitor check-in status.
+This module provides a graphical user interface using the Tkinter framework,
+serving as a lightweight and stable alternative to the Flet-based GUI.
 """
 
-# Determine log path based on execution environment (script vs frozen exe)
+# Determine log path based on execution environment
 if getattr(sys, 'frozen', False):
-    # Running as PyInstaller executable
     base_dir = os.path.dirname(sys.executable)
 else:
-    # Running as script
     base_dir = os.path.dirname(os.path.abspath(__file__))
 
-log_path = os.path.join(base_dir, 'gui_debug.log')
+log_path = os.path.join(base_dir, 'gui_tk_debug.log')
 
-# Configure logging to file for debugging GUI startup issues
-# We use force=True because core.py might have already configured logging
 logging.basicConfig(
     filename=log_path,
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     force=True
 )
-logger = logging.getLogger("GUI")
+logger = logging.getLogger("GUI_TK")
 
-class BJMFApp:
-    """
-    The main application class for the AutoCheckBJMF GUI.
+class AutoCheckApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("AutoCheckBJMF - Class Cube (Tkinter)")
+        self.root.geometry("900x650")
 
-    Manages the application state, UI components, and interactions between
-    the user and the core logic (ConfigManager, CheckInManager).
-    """
-    def __init__(self, page: ft.Page):
-        """
-        Initialize the BJMFApp.
+        # Apply a theme if possible
+        self.style = ttk.Style()
+        if 'clam' in self.style.theme_names():
+            self.style.theme_use('clam')
 
-        Args:
-            page (ft.Page): The Flet page object.
-        """
-        self.page = page
         self.config_manager = ConfigManager()
         self.checkin_manager = CheckInManager(self.config_manager, log_callback=self.log_callback)
-        self.scheduler_running = True
 
-        # State variables
-        self.current_view_index = 0
-        self.countdown_text = ft.Text("-", size=24, weight=ft.FontWeight.BOLD, color=ft.colors.PRIMARY)
-        self.status_text = ft.Text("Ready", size=16)
-        self.log_list = ft.ListView(expand=True, spacing=2, auto_scroll=True)
-        self.run_btn = ft.FilledButton(
-            "Run Check-in Now",
-            icon=ft.icons.PLAY_CIRCLE_OUTLINE,
-            on_click=self.run_manual_checkin
-        )
-
-        self.setup_page()
-        self.build_ui()
+        self.create_widgets()
         self.start_scheduler()
 
-    def setup_page(self):
-        """
-        Configure general page properties such as title, theme, and window size.
-        """
-        self.page.title = "AutoCheckBJMF - Class Cube"
-        self.page.theme_mode = ft.ThemeMode.SYSTEM
-        self.page.theme = ft.Theme(color_scheme_seed=ft.colors.PINK)
-        self.page.window.width = 1000
-        self.page.window.height = 700
-        self.page.window.min_width = 800
-        self.page.window.min_height = 600
-        self.page.padding = 0
+    def create_widgets(self):
+        # Navigation (Notebook)
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill='both', expand=True, padx=5, pady=5)
 
-    def build_ui(self):
-        """
-        Construct the main user interface structure.
+        # Tabs
+        self.tab_dashboard = ttk.Frame(self.notebook)
+        self.tab_tasks = ttk.Frame(self.notebook)
+        self.tab_accounts = ttk.Frame(self.notebook)
+        self.tab_locations = ttk.Frame(self.notebook)
+        self.tab_settings = ttk.Frame(self.notebook)
 
-        Sets up the navigation rail and the content area with an AnimatedSwitcher.
-        """
-        # Views
-        self.views = [
-            self.build_dashboard_view(),
-            self.build_tasks_view(),
-            self.build_accounts_view(),
-            self.build_locations_view(),
-            self.build_settings_view()
-        ]
+        self.notebook.add(self.tab_dashboard, text='Dashboard')
+        self.notebook.add(self.tab_tasks, text='Tasks')
+        self.notebook.add(self.tab_accounts, text='Accounts')
+        self.notebook.add(self.tab_locations, text='Locations')
+        self.notebook.add(self.tab_settings, text='Settings')
 
-        # Navigation Rail
-        self.nav_rail = ft.NavigationRail(
-            selected_index=0,
-            label_type=ft.NavigationRailLabelType.ALL,
-            min_width=100,
-            min_extended_width=200,
-            group_alignment=-0.9,
-            destinations=[
-                ft.NavigationRailDestination(
-                    icon=ft.icons.DASHBOARD_OUTLINED,
-                    selected_icon=ft.icons.DASHBOARD,
-                    label="Dashboard"
-                ),
-                ft.NavigationRailDestination(
-                    icon=ft.icons.TASK_ALT_OUTLINED,
-                    selected_icon=ft.icons.TASK_ALT,
-                    label="Tasks"
-                ),
-                ft.NavigationRailDestination(
-                    icon=ft.icons.PERSON_OUTLINE,
-                    selected_icon=ft.icons.PERSON,
-                    label="Accounts"
-                ),
-                ft.NavigationRailDestination(
-                    icon=ft.icons.LOCATION_ON_OUTLINED,
-                    selected_icon=ft.icons.LOCATION_ON,
-                    label="Locations"
-                ),
-                ft.NavigationRailDestination(
-                    icon=ft.icons.SETTINGS_OUTLINED,
-                    selected_icon=ft.icons.SETTINGS,
-                    label="Settings"
-                ),
-            ],
-            on_change=self.on_nav_change
-        )
+        # Bind events to refresh data when tabs are clicked
+        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_change)
 
-        # Content Area
-        self.content_area = ft.AnimatedSwitcher(
-            content=self.views[0],
-            transition=ft.AnimatedSwitcherTransition.FADE,
-            duration=300,
-            reverse_duration=300,
-            switch_in_curve=ft.AnimationCurve.EASE_IN,
-            switch_out_curve=ft.AnimationCurve.EASE_OUT,
-            expand=True
-        )
+        self.build_dashboard()
+        self.build_tasks()
+        self.build_accounts()
+        self.build_locations()
+        self.build_settings()
 
-        # Main Layout
-        self.page.add(
-            ft.Row(
-                [
-                    self.nav_rail,
-                    ft.VerticalDivider(width=1),
-                    self.content_area
-                ],
-                expand=True
-            )
-        )
-
-    def on_nav_change(self, e):
-        """
-        Handle navigation rail selection changes.
-
-        Args:
-            e (ft.ControlEvent): The event object.
-        """
-        self.current_view_index = e.control.selected_index
-        self.content_area.content = self.views[self.current_view_index]
-        self.content_area.update()
-
-        # Refresh specific views when accessed
-        if self.current_view_index == 1: # Tasks
-            self.refresh_tasks_list()
-        elif self.current_view_index == 2: # Accounts
-            self.refresh_accounts_list()
-        elif self.current_view_index == 3: # Locations
-            self.refresh_locations_list()
+    def on_tab_change(self, event):
+        tab_name = self.notebook.tab(self.notebook.select(), "text")
+        if tab_name == "Tasks":
+            self.refresh_tasks()
+        elif tab_name == "Accounts":
+            self.refresh_accounts()
+        elif tab_name == "Locations":
+            self.refresh_locations()
 
     # --- Dashboard ---
-    def build_dashboard_view(self):
-        """
-        Build the Dashboard view.
+    def build_dashboard(self):
+        frame = self.tab_dashboard
 
-        Returns:
-            ft.Container: The container holding dashboard controls.
-        """
-        return ft.Container(
-            padding=20,
-            content=ft.Column([
-                ft.Text("Dashboard", style=ft.TextThemeStyle.HEADLINE_MEDIUM, color=ft.colors.PRIMARY),
-                ft.Container(height=10),
-                ft.Row([
-                    ft.Card(
-                        elevation=2,
-                        content=ft.Container(
-                            padding=20,
-                            width=300,
-                            content=ft.Column([
-                                ft.Icon(ft.icons.TIMER, size=40, color=ft.colors.PRIMARY),
-                                ft.Text("Next Run In", weight=ft.FontWeight.BOLD),
-                                self.status_text,
-                                ft.Divider(),
-                                self.countdown_text
-                            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER)
-                        )
-                    ),
-                    ft.Container(
-                        expand=True,
-                        content=ft.Column([
-                            ft.Text("Actions", weight=ft.FontWeight.BOLD),
-                            self.run_btn,
-                            ft.OutlinedButton(
-                                "Clear Logs",
-                                icon=ft.icons.DELETE_SWEEP,
-                                on_click=lambda e: self.clear_logs()
-                            )
-                        ], spacing=10)
-                    )
-                ], alignment=ft.MainAxisAlignment.START, vertical_alignment=ft.CrossAxisAlignment.START),
-                ft.Container(height=20),
-                ft.Text("Activity Logs", style=ft.TextThemeStyle.TITLE_MEDIUM),
-                ft.Container(
-                    content=self.log_list,
-                    expand=True,
-                    border=ft.border.all(1, ft.colors.OUTLINE_VARIANT),
-                    border_radius=8,
-                    padding=10,
-                    bgcolor=ft.colors.SURFACE_VARIANT
-                )
-            ], expand=True)
-        )
+        # Header Info
+        top_frame = ttk.LabelFrame(frame, text="Status", padding=10)
+        top_frame.pack(fill='x', padx=10, pady=5)
+
+        self.lbl_status = ttk.Label(top_frame, text="Next Run In:", font=('Helvetica', 12))
+        self.lbl_status.pack(anchor='w')
+
+        self.lbl_countdown = ttk.Label(top_frame, text="-", font=('Helvetica', 24, 'bold'), foreground='blue')
+        self.lbl_countdown.pack(anchor='center', pady=10)
+
+        self.lbl_schedule_info = ttk.Label(top_frame, text="Ready")
+        self.lbl_schedule_info.pack(anchor='w')
+
+        # Buttons
+        btn_frame = ttk.Frame(top_frame)
+        btn_frame.pack(fill='x', pady=5)
+
+        self.btn_run = ttk.Button(btn_frame, text="Run Check-in Now", command=self.run_manual_checkin)
+        self.btn_run.pack(side='left', padx=5)
+
+        self.btn_clear = ttk.Button(btn_frame, text="Clear Logs", command=self.clear_logs)
+        self.btn_clear.pack(side='left', padx=5)
+
+        # Logs
+        log_frame = ttk.LabelFrame(frame, text="Activity Logs", padding=10)
+        log_frame.pack(fill='both', expand=True, padx=10, pady=5)
+
+        self.txt_log = scrolledtext.ScrolledText(log_frame, state='disabled', font=('Consolas', 10))
+        self.txt_log.pack(fill='both', expand=True)
+
+        # Log Text Tags for colors
+        self.txt_log.tag_config('error', foreground='red')
+        self.txt_log.tag_config('success', foreground='green')
+        self.txt_log.tag_config('normal', foreground='black')
 
     def log_callback(self, message):
-        """
-        Callback for handling log messages from the core logic.
+        def _update():
+            self.txt_log.config(state='normal')
 
-        Updates the UI log list with colored messages based on content.
+            tag = 'normal'
+            if any(x in message for x in ["❌", "失败", "Error", "无效", "Exception"]):
+                tag = 'error'
+            elif any(x in message for x in ["✅", "成功", "Finished"]):
+                tag = 'success'
 
-        Args:
-            message (str): The log message.
-        """
-        color = ft.colors.ON_SURFACE
-        if any(x in message for x in ["❌", "失败", "Error", "无效", "Exception"]):
-            color = ft.colors.ERROR
-        elif any(x in message for x in ["✅", "成功", "Finished"]):
-            color = ft.colors.GREEN
+            self.txt_log.insert(tk.END, message + "\n", tag)
+            self.txt_log.see(tk.END)
+            self.txt_log.config(state='disabled')
 
-        # Append to UI list safely
-        self.log_list.controls.append(ft.Text(message, font_family="Consolas", size=12, color=color))
-        # Keep only last 1000 logs to prevent memory issues
-        if len(self.log_list.controls) > 1000:
-             self.log_list.controls.pop(0)
-
-        try:
-            self.log_list.update()
-        except Exception:
-            pass # Page might be closed
+        self.root.after(0, _update)
 
     def clear_logs(self):
-        """Clear the log list in the UI."""
-        self.log_list.controls.clear()
-        self.log_list.update()
+        self.txt_log.config(state='normal')
+        self.txt_log.delete(1.0, tk.END)
+        self.txt_log.config(state='disabled')
 
-    def run_manual_checkin(self, e):
-        """
-        Trigger a manual check-in run.
-
-        Disables the run button and starts a background thread.
-
-        Args:
-            e (ft.ControlEvent): The event object.
-        """
-        self.run_btn.disabled = True
-        self.run_btn.update()
+    def run_manual_checkin(self):
+        self.btn_run.config(state='disabled')
         threading.Thread(target=self._run_checkin_thread, daemon=True).start()
 
     def _run_checkin_thread(self):
-        """Background thread worker for manual check-in execution."""
         self.log_callback(f"[{datetime.now().strftime('%H:%M:%S')}] Manual run started...")
         try:
             self.checkin_manager.run_job()
@@ -286,422 +159,366 @@ class BJMFApp:
             self.log_callback(f"Error: {e}")
             logger.error(traceback.format_exc())
 
-        self.run_btn.disabled = False
-        try:
-            self.run_btn.update()
-        except:
-            pass
+        self.root.after(0, lambda: self.btn_run.config(state='normal'))
 
     # --- Tasks ---
-    def build_tasks_view(self):
-        """
-        Build the Tasks management view.
+    def build_tasks(self):
+        frame = self.tab_tasks
 
-        Returns:
-            ft.Container: The container holding task controls.
-        """
-        self.tasks_column = ft.Column(spacing=10, scroll=ft.ScrollMode.AUTO)
-        return ft.Container(
-            padding=20,
-            content=ft.Column([
-                ft.Row([
-                    ft.Text("Tasks", style=ft.TextThemeStyle.HEADLINE_MEDIUM, color=ft.colors.PRIMARY),
-                    ft.FilledButton("Add Task", icon=ft.icons.ADD, on_click=self.open_add_task_dialog)
-                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                ft.Divider(),
-                self.tasks_column
-            ], expand=True)
-        )
+        btn_frame = ttk.Frame(frame, padding=5)
+        btn_frame.pack(fill='x')
 
-    def refresh_tasks_list(self):
-        """Refreshes the list of tasks displayed in the UI."""
-        self.tasks_column.controls.clear()
+        ttk.Button(btn_frame, text="Add Task", command=self.add_task).pack(side='left')
+        ttk.Button(btn_frame, text="Delete Task", command=self.delete_task).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Toggle Enable", command=self.toggle_task).pack(side='left', padx=5)
+
+        cols = ('Account', 'Location', 'Status')
+        self.tree_tasks = ttk.Treeview(frame, columns=cols, show='headings')
+        for col in cols:
+            self.tree_tasks.heading(col, text=col)
+            self.tree_tasks.column(col, width=150)
+
+        self.tree_tasks.pack(fill='both', expand=True, padx=10, pady=5)
+
+    def refresh_tasks(self):
+        for i in self.tree_tasks.get_children():
+            self.tree_tasks.delete(i)
+
         tasks = self.config_manager.get("tasks", [])
-
-        if not tasks:
-            self.tasks_column.controls.append(ft.Text("No tasks configured."))
-
         for idx, task in enumerate(tasks):
-            is_enabled = task.get("enable", True)
-            card = ft.Card(
-                content=ft.Container(
-                    padding=10,
-                    content=ft.Row([
-                        ft.Container(
-                            content=ft.Icon(ft.icons.TASK_ALT, color=ft.colors.ON_PRIMARY_CONTAINER if is_enabled else ft.colors.OUTLINE),
-                            bgcolor=ft.colors.PRIMARY_CONTAINER if is_enabled else ft.colors.SURFACE_VARIANT,
-                            border_radius=50,
-                            padding=10
-                        ),
-                        ft.Column([
-                            ft.Text(f"{task.get('account_name', '?')} @ {task.get('location_name', '?')}", weight=ft.FontWeight.BOLD, size=16),
-                            ft.Text("Active" if is_enabled else "Disabled", size=12, color=ft.colors.GREEN if is_enabled else ft.colors.OUTLINE)
-                        ], expand=True),
-                        ft.Switch(value=is_enabled, on_change=lambda e, i=idx: self.toggle_task(i, e.control.value)),
-                        ft.IconButton(ft.icons.DELETE, icon_color=ft.colors.ERROR, on_click=lambda e, i=idx: self.delete_task(i)),
-                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
-                )
-            )
-            self.tasks_column.controls.append(card)
-        self.tasks_column.update()
+            status = "Active" if task.get("enable", True) else "Disabled"
+            self.tree_tasks.insert('', 'end', iid=idx, values=(
+                task.get('account_name', '?'),
+                task.get('location_name', '?'),
+                status
+            ))
 
-    def open_add_task_dialog(self, e):
-        """
-        Open the dialog to add a new task.
-
-        Args:
-            e (ft.ControlEvent): The event object.
-        """
+    def add_task(self):
         accs = self.config_manager.get("accounts", [])
         locs = self.config_manager.get("locations", [])
 
         if not accs or not locs:
-            self.page.show_snack_bar(ft.SnackBar(content=ft.Text("Please add Accounts and Locations first.")))
+            messagebox.showwarning("Warning", "Please add Accounts and Locations first.")
             return
 
-        dd_acc = ft.Dropdown(label="Account", options=[ft.dropdown.Option(a.get("name")) for a in accs], expand=True)
-        dd_loc = ft.Dropdown(label="Location", options=[ft.dropdown.Option(l.get("name")) for l in locs], expand=True)
+        acc_names = [a.get("name") for a in accs]
+        loc_names = [l.get("name") for l in locs]
 
-        def save(e):
-            if not dd_acc.value or not dd_loc.value:
+        # Simple Dialog
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Add Task")
+        dialog.geometry("300x150")
+
+        ttk.Label(dialog, text="Account:").pack(pady=5)
+        cb_acc = ttk.Combobox(dialog, values=acc_names, state="readonly")
+        cb_acc.pack()
+
+        ttk.Label(dialog, text="Location:").pack(pady=5)
+        cb_loc = ttk.Combobox(dialog, values=loc_names, state="readonly")
+        cb_loc.pack()
+
+        def save():
+            if not cb_acc.get() or not cb_loc.get():
                 return
             tasks = self.config_manager.get("tasks", [])
             tasks.append({
-                "account_name": dd_acc.value,
-                "location_name": dd_loc.value,
+                "account_name": cb_acc.get(),
+                "location_name": cb_loc.get(),
                 "enable": True
             })
             self.config_manager.save_config({"tasks": tasks})
-            self.page.close(dlg)
-            self.refresh_tasks_list()
+            self.refresh_tasks()
+            dialog.destroy()
 
-        dlg = ft.AlertDialog(
-            title=ft.Text("New Task"),
-            content=ft.Container(height=150, content=ft.Column([dd_acc, dd_loc])),
-            actions=[
-                ft.TextButton("Cancel", on_click=lambda e: self.page.close(dlg)),
-                ft.FilledButton("Save", on_click=save)
-            ]
-        )
-        self.page.open(dlg)
+        ttk.Button(dialog, text="Save", command=save).pack(pady=10)
 
-    def toggle_task(self, idx, value):
-        """
-        Toggle the enabled state of a task.
+    def delete_task(self):
+        selected = self.tree_tasks.selection()
+        if not selected:
+            return
 
-        Args:
-            idx (int): The index of the task.
-            value (bool): The new enabled state.
-        """
-        tasks = self.config_manager.get("tasks", [])
-        if 0 <= idx < len(tasks):
-            tasks[idx]["enable"] = value
-            self.config_manager.save_config({"tasks": tasks})
-            self.refresh_tasks_list()
-
-    def delete_task(self, idx):
-        """
-        Delete a task.
-
-        Args:
-            idx (int): The index of the task to delete.
-        """
+        idx = int(selected[0])
         tasks = self.config_manager.get("tasks", [])
         if 0 <= idx < len(tasks):
             del tasks[idx]
             self.config_manager.save_config({"tasks": tasks})
-            self.refresh_tasks_list()
+            self.refresh_tasks()
+
+    def toggle_task(self):
+        selected = self.tree_tasks.selection()
+        if not selected:
+            return
+
+        idx = int(selected[0])
+        tasks = self.config_manager.get("tasks", [])
+        if 0 <= idx < len(tasks):
+            tasks[idx]["enable"] = not tasks[idx].get("enable", True)
+            self.config_manager.save_config({"tasks": tasks})
+            self.refresh_tasks()
 
     # --- Accounts ---
-    def build_accounts_view(self):
-        """
-        Build the Accounts management view.
+    def build_accounts(self):
+        frame = self.tab_accounts
 
-        Returns:
-            ft.Container: The container holding account controls.
-        """
-        self.accounts_column = ft.Column(spacing=10, scroll=ft.ScrollMode.AUTO)
-        return ft.Container(
-            padding=20,
-            content=ft.Column([
-                ft.Row([
-                    ft.Text("Accounts", style=ft.TextThemeStyle.HEADLINE_MEDIUM, color=ft.colors.PRIMARY),
-                    ft.FilledButton("Add Account", icon=ft.icons.ADD, on_click=lambda e: self.open_account_dialog(-1))
-                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                ft.Divider(),
-                self.accounts_column
-            ], expand=True)
-        )
+        btn_frame = ttk.Frame(frame, padding=5)
+        btn_frame.pack(fill='x')
 
-    def refresh_accounts_list(self):
-        """Refreshes the list of accounts displayed in the UI."""
-        self.accounts_column.controls.clear()
+        ttk.Button(btn_frame, text="Add Account", command=lambda: self.open_account_dialog(-1)).pack(side='left')
+        ttk.Button(btn_frame, text="Edit Account", command=self.edit_account).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Delete Account", command=self.delete_account).pack(side='left', padx=5)
+
+        cols = ('Name', 'Class ID', 'Cookie Preview')
+        self.tree_accounts = ttk.Treeview(frame, columns=cols, show='headings')
+        for col in cols:
+            self.tree_accounts.heading(col, text=col)
+        self.tree_accounts.column('Cookie Preview', width=300)
+
+        self.tree_accounts.pack(fill='both', expand=True, padx=10, pady=5)
+
+    def refresh_accounts(self):
+        for i in self.tree_accounts.get_children():
+            self.tree_accounts.delete(i)
+
         accounts = self.config_manager.get("accounts", [])
         for idx, acc in enumerate(accounts):
-            card = ft.Card(
-                content=ft.Container(
-                    padding=10,
-                    content=ft.Row([
-                        ft.Container(
-                            content=ft.Icon(ft.icons.PERSON, color=ft.colors.ON_SECONDARY_CONTAINER),
-                            bgcolor=ft.colors.SECONDARY_CONTAINER,
-                            border_radius=50,
-                            padding=10
-                        ),
-                        ft.Column([
-                            ft.Text(acc.get("name", "Account"), weight=ft.FontWeight.BOLD, size=16),
-                            ft.Text(f"Class: {acc.get('class_id')}", size=12, color=ft.colors.OUTLINE)
-                        ], expand=True),
-                        ft.IconButton(ft.icons.EDIT, on_click=lambda e, i=idx: self.open_account_dialog(i)),
-                        ft.IconButton(ft.icons.DELETE, icon_color=ft.colors.ERROR, on_click=lambda e, i=idx: self.delete_account(i)),
-                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
-                )
-            )
-            self.accounts_column.controls.append(card)
-        self.accounts_column.update()
+            cookie_short = (acc.get('cookie', '')[:20] + '...') if len(acc.get('cookie', '')) > 20 else acc.get('cookie', '')
+            self.tree_accounts.insert('', 'end', iid=idx, values=(
+                acc.get('name', ''),
+                acc.get('class_id', ''),
+                cookie_short
+            ))
+
+    def edit_account(self):
+        selected = self.tree_accounts.selection()
+        if selected:
+            self.open_account_dialog(int(selected[0]))
 
     def open_account_dialog(self, idx):
-        """
-        Open the dialog to add or edit an account.
-
-        Args:
-            idx (int): The index of the account to edit, or -1 to add a new account.
-        """
         accounts = self.config_manager.get("accounts", [])
         is_edit = idx >= 0
         data = accounts[idx] if is_edit else {}
 
-        tf_name = ft.TextField(label="Name", value=data.get("name", ""), expand=True)
-        tf_class = ft.TextField(label="Class ID", value=data.get("class_id", ""), expand=True)
-        tf_cookie = ft.TextField(label="Cookie", value=data.get("cookie", ""), multiline=True, min_lines=3)
-        tf_pwd = ft.TextField(label="Password (Optional)", value=data.get("pwd", ""), password=True, can_reveal_password=True)
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Edit Account" if is_edit else "Add Account")
+        dialog.geometry("400x350")
 
-        def save(e):
+        ttk.Label(dialog, text="Name:").pack()
+        entry_name = ttk.Entry(dialog)
+        entry_name.insert(0, data.get("name", ""))
+        entry_name.pack(fill='x', padx=10)
+
+        ttk.Label(dialog, text="Class ID:").pack()
+        entry_class = ttk.Entry(dialog)
+        entry_class.insert(0, data.get("class_id", ""))
+        entry_class.pack(fill='x', padx=10)
+
+        ttk.Label(dialog, text="Cookie:").pack()
+        txt_cookie = scrolledtext.ScrolledText(dialog, height=5)
+        txt_cookie.insert(1.0, data.get("cookie", ""))
+        txt_cookie.pack(fill='x', padx=10)
+
+        ttk.Label(dialog, text="Password (Optional):").pack()
+        entry_pwd = ttk.Entry(dialog, show="*")
+        entry_pwd.insert(0, data.get("pwd", ""))
+        entry_pwd.pack(fill='x', padx=10)
+
+        def save():
             new_acc = {
-                "name": tf_name.value,
-                "class_id": tf_class.value,
-                "cookie": tf_cookie.value.strip(),
-                "pwd": tf_pwd.value
+                "name": entry_name.get(),
+                "class_id": entry_class.get(),
+                "cookie": txt_cookie.get(1.0, tk.END).strip(),
+                "pwd": entry_pwd.get()
             }
             if is_edit:
                 accounts[idx] = new_acc
             else:
                 accounts.append(new_acc)
             self.config_manager.save_config({"accounts": accounts})
-            self.page.close(dlg)
-            self.refresh_accounts_list()
+            self.refresh_accounts()
+            dialog.destroy()
 
-        dlg = ft.AlertDialog(
-            title=ft.Text("Edit Account" if is_edit else "Add Account"),
-            content=ft.Container(width=500, content=ft.Column([ft.Row([tf_name, tf_class]), tf_cookie, tf_pwd], tight=True)),
-            actions=[
-                ft.TextButton("Cancel", on_click=lambda e: self.page.close(dlg)),
-                ft.FilledButton("Save", on_click=save)
-            ]
-        )
-        self.page.open(dlg)
+        ttk.Button(dialog, text="Save", command=save).pack(pady=10)
 
-    def delete_account(self, idx):
-        """
-        Delete an account.
+    def delete_account(self):
+        selected = self.tree_accounts.selection()
+        if not selected:
+            return
 
-        Args:
-            idx (int): The index of the account to delete.
-        """
+        idx = int(selected[0])
         accounts = self.config_manager.get("accounts", [])
         if 0 <= idx < len(accounts):
             del accounts[idx]
             self.config_manager.save_config({"accounts": accounts})
-            self.refresh_accounts_list()
+            self.refresh_accounts()
 
     # --- Locations ---
-    def build_locations_view(self):
-        """
-        Build the Locations management view.
+    def build_locations(self):
+        frame = self.tab_locations
 
-        Returns:
-            ft.Container: The container holding location controls.
-        """
-        self.locations_column = ft.Column(spacing=10, scroll=ft.ScrollMode.AUTO)
-        return ft.Container(
-            padding=20,
-            content=ft.Column([
-                ft.Row([
-                    ft.Text("Locations", style=ft.TextThemeStyle.HEADLINE_MEDIUM, color=ft.colors.PRIMARY),
-                    ft.FilledButton("Add Location", icon=ft.icons.ADD, on_click=lambda e: self.open_location_dialog(-1))
-                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                ft.Divider(),
-                self.locations_column
-            ], expand=True)
-        )
+        btn_frame = ttk.Frame(frame, padding=5)
+        btn_frame.pack(fill='x')
 
-    def refresh_locations_list(self):
-        """Refreshes the list of locations displayed in the UI."""
-        self.locations_column.controls.clear()
+        ttk.Button(btn_frame, text="Add Location", command=lambda: self.open_location_dialog(-1)).pack(side='left')
+        ttk.Button(btn_frame, text="Edit Location", command=self.edit_location).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Delete Location", command=self.delete_location).pack(side='left', padx=5)
+
+        cols = ('Name', 'Lat', 'Lng', 'Acc')
+        self.tree_locations = ttk.Treeview(frame, columns=cols, show='headings')
+        for col in cols:
+            self.tree_locations.heading(col, text=col)
+
+        self.tree_locations.pack(fill='both', expand=True, padx=10, pady=5)
+
+    def refresh_locations(self):
+        for i in self.tree_locations.get_children():
+            self.tree_locations.delete(i)
+
         locations = self.config_manager.get("locations", [])
         for idx, loc in enumerate(locations):
-            card = ft.Card(
-                content=ft.Container(
-                    padding=10,
-                    content=ft.Row([
-                        ft.Container(
-                            content=ft.Icon(ft.icons.LOCATION_ON, color=ft.colors.ON_TERTIARY_CONTAINER),
-                            bgcolor=ft.colors.TERTIARY_CONTAINER,
-                            border_radius=50,
-                            padding=10
-                        ),
-                        ft.Column([
-                            ft.Text(loc.get("name", "Location"), weight=ft.FontWeight.BOLD, size=16),
-                            ft.Text(f"{loc.get('lat')}, {loc.get('lng')}", size=12, color=ft.colors.OUTLINE)
-                        ], expand=True),
-                        ft.IconButton(ft.icons.EDIT, on_click=lambda e, i=idx: self.open_location_dialog(i)),
-                        ft.IconButton(ft.icons.DELETE, icon_color=ft.colors.ERROR, on_click=lambda e, i=idx: self.delete_location(i)),
-                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
-                )
-            )
-            self.locations_column.controls.append(card)
-        self.locations_column.update()
+            self.tree_locations.insert('', 'end', iid=idx, values=(
+                loc.get('name', ''),
+                loc.get('lat', ''),
+                loc.get('lng', ''),
+                loc.get('acc', '')
+            ))
+
+    def edit_location(self):
+        selected = self.tree_locations.selection()
+        if selected:
+            self.open_location_dialog(int(selected[0]))
 
     def open_location_dialog(self, idx):
-        """
-        Open the dialog to add or edit a location.
-
-        Args:
-            idx (int): The index of the location to edit, or -1 to add a new location.
-        """
         locations = self.config_manager.get("locations", [])
         is_edit = idx >= 0
         data = locations[idx] if is_edit else {}
 
-        tf_name = ft.TextField(label="Name", value=data.get("name", ""), expand=True)
-        tf_lat = ft.TextField(label="Lat", value=data.get("lat", ""), expand=True)
-        tf_lng = ft.TextField(label="Lng", value=data.get("lng", ""), expand=True)
-        tf_acc = ft.TextField(label="Accuracy", value=data.get("acc", "0.0"), expand=True)
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Edit Location" if is_edit else "Add Location")
+        dialog.geometry("300x250")
 
-        def save(e):
+        ttk.Label(dialog, text="Name:").pack()
+        entry_name = ttk.Entry(dialog)
+        entry_name.insert(0, data.get("name", ""))
+        entry_name.pack(fill='x', padx=10)
+
+        ttk.Label(dialog, text="Latitude:").pack()
+        entry_lat = ttk.Entry(dialog)
+        entry_lat.insert(0, data.get("lat", ""))
+        entry_lat.pack(fill='x', padx=10)
+
+        ttk.Label(dialog, text="Longitude:").pack()
+        entry_lng = ttk.Entry(dialog)
+        entry_lng.insert(0, data.get("lng", ""))
+        entry_lng.pack(fill='x', padx=10)
+
+        ttk.Label(dialog, text="Accuracy:").pack()
+        entry_acc = ttk.Entry(dialog)
+        entry_acc.insert(0, data.get("acc", "0.0"))
+        entry_acc.pack(fill='x', padx=10)
+
+        def save():
             new_loc = {
-                "name": tf_name.value,
-                "lat": tf_lat.value,
-                "lng": tf_lng.value,
-                "acc": tf_acc.value
+                "name": entry_name.get(),
+                "lat": entry_lat.get(),
+                "lng": entry_lng.get(),
+                "acc": entry_acc.get()
             }
             if is_edit:
                 locations[idx] = new_loc
             else:
                 locations.append(new_loc)
             self.config_manager.save_config({"locations": locations})
-            self.page.close(dlg)
-            self.refresh_locations_list()
+            self.refresh_locations()
+            dialog.destroy()
 
-        dlg = ft.AlertDialog(
-            title=ft.Text("Edit Location" if is_edit else "Add Location"),
-            content=ft.Container(width=500, content=ft.Column([tf_name, ft.Row([tf_lat, tf_lng]), tf_acc], tight=True)),
-            actions=[
-                ft.TextButton("Cancel", on_click=lambda e: self.page.close(dlg)),
-                ft.FilledButton("Save", on_click=save)
-            ]
-        )
-        self.page.open(dlg)
+        ttk.Button(dialog, text="Save", command=save).pack(pady=10)
 
-    def delete_location(self, idx):
-        """
-        Delete a location.
+    def delete_location(self):
+        selected = self.tree_locations.selection()
+        if not selected:
+            return
 
-        Args:
-            idx (int): The index of the location to delete.
-        """
+        idx = int(selected[0])
         locations = self.config_manager.get("locations", [])
         if 0 <= idx < len(locations):
             del locations[idx]
             self.config_manager.save_config({"locations": locations})
-            self.refresh_locations_list()
+            self.refresh_locations()
 
     # --- Settings ---
-    def build_settings_view(self):
-        """
-        Build the Settings view.
-
-        Returns:
-            ft.Container: The container holding settings controls.
-        """
-        # We need to rebuild these inputs when the view is created to ensure they have latest values
+    def build_settings(self):
+        frame = self.tab_settings
         wecom = self.config_manager.get("wecom", {})
 
-        self.tf_sched = ft.TextField(label="Schedule Time (HH:MM)", value=self.config_manager.get("scheduletime", "08:00"))
-        self.tf_corpid = ft.TextField(label="CorpID", value=wecom.get("corpid", ""))
-        self.tf_secret = ft.TextField(label="Secret", value=wecom.get("secret", ""), password=True, can_reveal_password=True)
-        self.tf_agentid = ft.TextField(label="AgentID", value=wecom.get("agentid", ""))
-        self.tf_touser = ft.TextField(label="ToUser", value=wecom.get("touser", "@all"))
-        self.sw_debug = ft.Switch(label="Debug Logging", value=self.config_manager.get("debug", False))
+        ttk.Label(frame, text="Global Settings", font=('Helvetica', 14)).pack(pady=10)
 
-        return ft.Container(
-            padding=20,
-            content=ft.Column([
-                ft.Text("Global Settings", style=ft.TextThemeStyle.HEADLINE_MEDIUM, color=ft.colors.PRIMARY),
-                ft.Container(height=10),
-                ft.Text("Scheduler", style=ft.TextThemeStyle.TITLE_MEDIUM),
-                self.tf_sched,
-                ft.Divider(),
-                ft.Text("WeCom Notifications", style=ft.TextThemeStyle.TITLE_MEDIUM),
-                self.tf_corpid,
-                self.tf_secret,
-                self.tf_agentid,
-                self.tf_touser,
-                ft.Divider(),
-                self.sw_debug,
-                ft.Container(height=20),
-                ft.FilledButton("Save Settings", icon=ft.icons.SAVE, on_click=self.save_settings)
-            ], scroll=ft.ScrollMode.AUTO, expand=True)
-        )
+        grid_frame = ttk.Frame(frame)
+        grid_frame.pack(padx=20, pady=10)
 
-    def save_settings(self, e):
-        """
-        Save the global settings to configuration.
+        ttk.Label(grid_frame, text="Schedule Time (HH:MM):").grid(row=0, column=0, sticky='e', padx=5, pady=5)
+        self.entry_sched = ttk.Entry(grid_frame)
+        self.entry_sched.insert(0, self.config_manager.get("scheduletime", "08:00"))
+        self.entry_sched.grid(row=0, column=1, sticky='w', padx=5, pady=5)
 
-        Args:
-            e (ft.ControlEvent): The event object.
-        """
+        ttk.Label(grid_frame, text="WeCom CorpID:").grid(row=1, column=0, sticky='e', padx=5, pady=5)
+        self.entry_corpid = ttk.Entry(grid_frame)
+        self.entry_corpid.insert(0, wecom.get("corpid", ""))
+        self.entry_corpid.grid(row=1, column=1, sticky='w', padx=5, pady=5)
+
+        ttk.Label(grid_frame, text="WeCom Secret:").grid(row=2, column=0, sticky='e', padx=5, pady=5)
+        self.entry_secret = ttk.Entry(grid_frame, show="*")
+        self.entry_secret.insert(0, wecom.get("secret", ""))
+        self.entry_secret.grid(row=2, column=1, sticky='w', padx=5, pady=5)
+
+        ttk.Label(grid_frame, text="WeCom AgentID:").grid(row=3, column=0, sticky='e', padx=5, pady=5)
+        self.entry_agentid = ttk.Entry(grid_frame)
+        self.entry_agentid.insert(0, wecom.get("agentid", ""))
+        self.entry_agentid.grid(row=3, column=1, sticky='w', padx=5, pady=5)
+
+        ttk.Label(grid_frame, text="WeCom ToUser:").grid(row=4, column=0, sticky='e', padx=5, pady=5)
+        self.entry_touser = ttk.Entry(grid_frame)
+        self.entry_touser.insert(0, wecom.get("touser", "@all"))
+        self.entry_touser.grid(row=4, column=1, sticky='w', padx=5, pady=5)
+
+        self.var_debug = tk.BooleanVar(value=self.config_manager.get("debug", False))
+        ttk.Checkbutton(grid_frame, text="Enable Debug Logging", variable=self.var_debug).grid(row=5, column=1, sticky='w', pady=10)
+
+        ttk.Button(frame, text="Save Settings", command=self.save_settings).pack(pady=10)
+
+    def save_settings(self):
         new_conf = {
-            "scheduletime": self.tf_sched.value,
+            "scheduletime": self.entry_sched.get(),
             "wecom": {
-                "corpid": self.tf_corpid.value,
-                "secret": self.tf_secret.value,
-                "agentid": self.tf_agentid.value,
-                "touser": self.tf_touser.value
+                "corpid": self.entry_corpid.get(),
+                "secret": self.entry_secret.get(),
+                "agentid": self.entry_agentid.get(),
+                "touser": self.entry_touser.get()
             },
-            "debug": self.sw_debug.value
+            "debug": self.var_debug.get()
         }
         self.config_manager.save_config(new_conf)
         self.update_scheduler_job()
-        self.page.show_snack_bar(ft.SnackBar(content=ft.Text("Settings saved successfully.")))
+        messagebox.showinfo("Success", "Settings saved successfully.")
 
-    # --- Scheduler Logic ---
+    # --- Scheduler ---
     def start_scheduler(self):
-        """Start the background scheduler thread."""
         self.update_scheduler_job()
         threading.Thread(target=self._scheduler_loop, daemon=True).start()
 
     def update_scheduler_job(self):
-        """Update the scheduled job based on the current configuration."""
         schedule.clear()
         time_str = self.config_manager.get("scheduletime", "08:00")
         try:
             datetime.strptime(time_str, "%H:%M")
             schedule.every().day.at(time_str).do(self._scheduled_job)
-            self.status_text.value = f"Scheduled daily at {time_str}"
+            self.lbl_schedule_info.config(text=f"Scheduled daily at {time_str}")
         except ValueError:
-            self.status_text.value = "Invalid time format (HH:MM)"
-        self.status_text.update()
+            self.lbl_schedule_info.config(text="Invalid time format (HH:MM)")
 
     def _scheduled_job(self):
-        """The job to be executed by the scheduler."""
         threading.Thread(target=self._run_job_thread, daemon=True).start()
 
     def _run_job_thread(self):
-        """
-        Background thread for scheduled job to avoid blocking the scheduler loop
-        (and thus the countdown timer).
-        """
         self.log_callback(f"[{datetime.now().strftime('%H:%M:%S')}] Starting scheduled check-in...")
         try:
             self.checkin_manager.run_job()
@@ -711,15 +528,13 @@ class BJMFApp:
             logger.error(traceback.format_exc())
 
     def _scheduler_loop(self):
-        """The background loop that keeps the scheduler running."""
         while True:
             schedule.run_pending()
             # Update countdown
-            self._update_countdown()
+            self.root.after(0, self._update_countdown)
             time.sleep(1)
 
     def _update_countdown(self):
-        """Calculate and update the countdown timer to the next scheduled run."""
         time_str = self.config_manager.get("scheduletime")
         if not time_str:
             return
@@ -732,34 +547,12 @@ class BJMFApp:
             diff = target_dt - now
             hours, remainder = divmod(diff.seconds, 3600)
             minutes, seconds = divmod(remainder, 60)
-            self.countdown_text.value = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-            try:
-                self.countdown_text.update()
-            except:
-                pass
+            self.lbl_countdown.config(text=f"{hours:02d}:{minutes:02d}:{seconds:02d}")
         except:
             pass
 
-def main(page: ft.Page):
-    """
-    The entry point for the Flet application.
-
-    Args:
-        page (ft.Page): The Flet page object.
-    """
-    try:
-        BJMFApp(page)
-    except Exception as e:
-        logger.error(f"Fatal startup error: {traceback.format_exc()}")
-        page.add(ft.Text(f"Error starting application: {e}", color="red"))
-
 if __name__ == "__main__":
-    # Crucial for PyInstaller compatibility on Windows
-    # Must be the very first line after check
-    multiprocessing.freeze_support()
-
-    try:
-        ft.app(target=main)
-    except Exception as e:
-        with open("fatal_crash.log", "w") as f:
-            f.write(traceback.format_exc())
+    # Standard Tkinter boilerplate
+    root = tk.Tk()
+    app = AutoCheckApp(root)
+    root.mainloop()
