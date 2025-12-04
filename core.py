@@ -42,14 +42,25 @@ class ConfigManager:
     def _load_config(self):
         # 默认配置
         config = {
+            "locations": [], # List of {name, lat, lng, acc}
+            "accounts": [],  # List of {name, cookie, class_id, pwd}
+            "tasks": [],     # List of {account_name, location_name, enable}
+            "scheduletime": "08:00",
+            "wecom": {
+                "corpid": "",
+                "secret": "",
+                "agentid": "",
+                "touser": "@all"
+            },
+            # 兼容旧字段
+            "pushplus": "",
             "class": "",
             "lat": "0.0",
             "lng": "0.0",
             "acc": "0.0",
             "cookie": [],
-            "scheduletime": "08:00",
-            "pushplus": "",
-            "pwd": "" # 预留密码字段
+            "pwd": "",
+            "users": [] # 兼容之前版本的多用户结构
         }
 
         # 1. 尝试从文件加载
@@ -61,7 +72,7 @@ class ConfigManager:
             except Exception as e:
                 logger.warning(f"配置文件读取失败: {e}，将使用默认值/环境变量")
 
-        # 2. 尝试从环境变量加载 (优先级更高，覆盖文件配置)
+        # 2. 尝试从环境变量加载
         env_map = {
             "ClassID": "class",
             "X": "lat",
@@ -69,29 +80,117 @@ class ConfigManager:
             "ACC": "acc",
             "SearchTime": "scheduletime",
             "token": "pushplus",
-            "PASSWORD": "pwd"
+            "PASSWORD": "pwd",
+            "WECOM_CORPID": "wecom.corpid",
+            "WECOM_SECRET": "wecom.secret",
+            "WECOM_AGENTID": "wecom.agentid",
+            "WECOM_TOUSER": "wecom.touser"
         }
         
         for env_key, conf_key in env_map.items():
             val = os.environ.get(env_key)
             if val:
-                config[conf_key] = val
+                if "." in conf_key:
+                    section, key = conf_key.split(".")
+                    if section in config and isinstance(config[section], dict):
+                        config[section][key] = val
+                else:
+                    config[conf_key] = val
 
-        # 3. 特殊处理 Cookie (支持多账号，以 & 或换行分隔)
+        # 3. 特殊处理 Cookie
         env_cookie = os.environ.get("MyCookie")
         if env_cookie:
-            # 分割并去空
             cookies = [c.strip() for c in re.split(r'[&\n]', env_cookie) if c.strip()]
             config["cookie"] = cookies
         
-        # 确保 cookie 是列表
         if isinstance(config["cookie"], str):
             config["cookie"] = [config["cookie"]]
 
+        # 4. 迁移逻辑
+        if not config["tasks"]:
+            # 优先检查 users 列表 (v2结构)
+            users_v2 = config.get("users", [])
+            if users_v2:
+                for idx, u in enumerate(users_v2):
+                    loc_name = f"Location_{idx+1}"
+                    acc_name = u.get("remark", f"User_{idx+1}")
+
+                    # 添加地点
+                    if not any(l['name'] == loc_name for l in config["locations"]):
+                        config["locations"].append({
+                            "name": loc_name,
+                            "lat": u.get("lat", "0"),
+                            "lng": u.get("lng", "0"),
+                            "acc": u.get("acc", "0")
+                        })
+
+                    # 添加账号 (绑定 ClassID)
+                    if not any(a['name'] == acc_name for a in config["accounts"]):
+                        config["accounts"].append({
+                            "name": acc_name,
+                            "cookie": u.get("cookie", ""),
+                            "class_id": u.get("class_id", ""),
+                            "pwd": u.get("pwd", "")
+                        })
+
+                    # 添加任务
+                    config["tasks"].append({
+                        "account_name": acc_name,
+                        "location_name": loc_name,
+                        "enable": u.get("enable", True)
+                    })
+            else:
+                # 检查 v1 结构 (扁平配置)
+                cookies = config.get("cookie", [])
+                class_id = config.get("class")
+                if cookies and class_id:
+                    # 创建默认地点
+                    def_loc_name = "Default Location"
+                    if not config["locations"]:
+                        config["locations"].append({
+                            "name": def_loc_name,
+                            "lat": config.get("lat", "0.0"),
+                            "lng": config.get("lng", "0.0"),
+                            "acc": config.get("acc", "0.0")
+                        })
+
+                    # 创建账号和任务
+                    for idx, c in enumerate(cookies):
+                        acc_name = self._extract_username_static(c)
+                        if acc_name == "User":
+                             acc_name = f"User_{idx+1}"
+
+                        if not any(a['name'] == acc_name for a in config["accounts"]):
+                            config["accounts"].append({
+                                "name": acc_name,
+                                "cookie": c,
+                                "class_id": class_id,
+                                "pwd": config.get("pwd", "")
+                            })
+
+                        config["tasks"].append({
+                            "account_name": acc_name,
+                            "location_name": def_loc_name,
+                            "enable": True
+                        })
+
         return config
+
+    def _extract_username_static(self, cookie):
+        """静态工具方法：提取用户名"""
+        match = re.search(r'username=([^;]+)', cookie)
+        return match.group(1) if match else "User"
 
     def get(self, key, default=None):
         return self.data.get(key, default)
+
+    def save_config(self, new_data):
+        self.data.update(new_data)
+        try:
+            with open(self.config_path, 'w', encoding='utf-8') as f:
+                json.dump(self.data, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"保存配置失败: {e}")
 
 # ===========================
 # 3. 核心 API 交互模块
@@ -181,26 +280,71 @@ class BJMFClient:
 # 4. 任务调度与执行模块
 # ===========================
 
-class AutoCheckJob:
-    def __init__(self, config_manager):
+class CheckInManager:
+    def __init__(self, config_manager, log_callback=None):
         self.cfg = config_manager
+        self.log_callback = log_callback
 
-    def _get_jittered_location(self):
+    def _get_jittered_location(self, lat, lng, acc):
         """获取带随机抖动的坐标"""
         try:
-            base_lat = float(self.cfg.get("lat"))
-            base_lng = float(self.cfg.get("lng"))
+            base_lat = float(lat)
+            base_lng = float(lng)
             # 随机抖动范围 (约 10-20米)
             offset = random.uniform(-0.00015, 0.00015)
-            return base_lat + offset, base_lng + offset, self.cfg.get("acc")
+            return base_lat + offset, base_lng + offset, acc
         except ValueError:
             logger.critical("坐标配置错误，请检查 lat/lng 是否为数字")
             return 0, 0, 0
 
     def _push_notify(self, content):
-        token = self.cfg.get("pushplus")
-        if not token:
+        wecom = self.cfg.get("wecom", {})
+        corpid = wecom.get("corpid")
+        secret = wecom.get("secret")
+        agentid = wecom.get("agentid")
+
+        if not corpid or not secret or not agentid:
+            # 尝试回退到 pushplus (兼容旧配置)
+            token = self.cfg.get("pushplus")
+            if token:
+                self._push_pushplus(token, content)
             return
+
+        try:
+            # 1. 获取 Access Token
+            token_url = f"https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid={corpid}&corpsecret={secret}"
+            r = requests.get(token_url, timeout=10)
+            token_data = r.json()
+
+            if token_data.get("errcode") != 0:
+                logger.error(f"企业微信 AccessToken 获取失败: {token_data}")
+                return
+
+            access_token = token_data.get("access_token")
+
+            # 2. 发送消息
+            send_url = f"https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={access_token}"
+            payload = {
+                "touser": wecom.get("touser", "@all"),
+                "msgtype": "text",
+                "agentid": agentid,
+                "text": {
+                    "content": f"【班级魔法签到通知】\n{content}"
+                },
+                "safe": 0
+            }
+
+            r_send = requests.post(send_url, json=payload, timeout=10)
+            res = r_send.json()
+            if res.get("errcode") == 0:
+                logger.info("企业微信推送成功")
+            else:
+                logger.warning(f"企业微信推送失败: {res}")
+
+        except Exception as e:
+            logger.warning(f"推送异常: {e}")
+
+    def _push_pushplus(self, token, content):
         url = 'http://www.pushplus.plus/send'
         data = {
             "token": token,
@@ -209,46 +353,86 @@ class AutoCheckJob:
         }
         try:
             requests.post(url, json=data, timeout=5)
-            logger.info("推送通知已发送")
+            logger.info("PushPlus 推送已发送")
         except Exception as e:
-            logger.warning(f"推送失败: {e}")
+            logger.warning(f"PushPlus 推送失败: {e}")
+
+    def log(self, msg):
+        logger.info(msg)
+        if self.log_callback:
+            self.log_callback(msg)
+
+    def run_job(self):
+        """适配 GUI 的统一入口 (等同于 run_with_retries)"""
+        self.run_with_retries()
 
     def run_check_flow(self):
-        """执行一次完整的检查流程（遍历所有用户）"""
-        logger.info("--- 开始执行签到任务 ---")
-        cookies = self.cfg.get("cookie", [])
-        class_id = self.cfg.get("class")
-        pwd = self.cfg.get("pwd", "")
+        """执行一次完整的检查流程（遍历所有启用任务）"""
+        self.log("--- 开始执行签到任务 ---")
 
-        if not cookies or not class_id:
-            logger.warning("未配置 Cookie 或 ClassID，跳过任务")
+        tasks = self.cfg.get("tasks", [])
+        locations = self.cfg.get("locations", [])
+        accounts = self.cfg.get("accounts", [])
+
+        if not tasks:
+            self.log("任务列表为空，跳过任务")
             return
 
         push_messages = []
         needs_retry = False
 
-        for i, cookie in enumerate(cookies):
-            client = BJMFClient(cookie, class_id)
-            logger.info(f"正在检查用户 [{client.username}] ...")
+        # 将 list 转为 dict 方便查找
+        loc_map = {l["name"]: l for l in locations}
+        acc_map = {a["name"]: a for a in accounts}
 
-            tasks = client.fetch_tasks()
+        for task in tasks:
+            if not task.get("enable", True):
+                continue
+
+            acc_name = task.get("account_name")
+            loc_name = task.get("location_name")
+
+            account = acc_map.get(acc_name)
+            location = loc_map.get(loc_name)
+
+            if not account or not location:
+                self.log(f"任务无效: 找不到账号 [{acc_name}] 或 地点 [{loc_name}]")
+                continue
+
+            cookie = account.get("cookie")
+            class_id = account.get("class_id")
+
+            if not cookie or not class_id:
+                self.log(f"账号 [{acc_name}] 配置不完整 (缺少Cookie或ClassID)，跳过")
+                continue
+
+            client = BJMFClient(cookie, class_id)
+            self.log(f"正在执行任务: [{acc_name}] @ [{loc_name}]")
+
+            pending_tasks = client.fetch_tasks()
             
-            if tasks is None:
-                push_messages.append(f"用户 {client.username}: Cookie 失效 ❌")
+            if pending_tasks is None:
+                push_messages.append(f"任务 {acc_name}: Cookie 失效 ❌")
                 continue
             
-            if not tasks:
-                logger.info(f"用户 [{client.username}] 无需签到")
+            if not pending_tasks:
+                self.log(f"账号 [{acc_name}] 无需签到")
                 continue
 
             # 开始签到
-            lat, lng, acc = self._get_jittered_location()
-            for task_id in tasks:
-                result = client.execute_sign(task_id, lat, lng, acc, pwd)
-                logger.info(f"用户 [{client.username}] 任务 [{task_id}] 结果: {result}")
+            lat = location.get("lat", "0")
+            lng = location.get("lng", "0")
+            acc = location.get("acc", "0")
+            pwd = account.get("pwd", "")
+
+            r_lat, r_lng, r_acc = self._get_jittered_location(lat, lng, acc)
+
+            for task_id in pending_tasks:
+                result = client.execute_sign(task_id, r_lat, r_lng, r_acc, pwd)
+                self.log(f"任务 [{acc_name}] 签到ID [{task_id}] 结果: {result}")
                 
                 status_icon = "✅" if "成功" in result else "❌"
-                push_messages.append(f"用户 {client.username}: {result} {status_icon}")
+                push_messages.append(f"任务 {acc_name} @ {loc_name}: {result} {status_icon}")
                 
                 if "成功" not in result:
                     needs_retry = True
@@ -257,7 +441,7 @@ class AutoCheckJob:
         if push_messages:
             self._push_notify("\n".join(push_messages))
         
-        logger.info("--- 本次任务结束 ---")
+        self.log("--- 本次任务结束 ---")
         return needs_retry
 
     def run_with_retries(self):
@@ -269,13 +453,13 @@ class AutoCheckJob:
         if failed:
             retries = [5, 15] # 分别在 5分钟 和 15分钟 后重试
             for wait_min in retries:
-                logger.info(f"检测到失败任务，将在 {wait_min} 分钟后重试...")
+                self.log(f"检测到失败任务，将在 {wait_min} 分钟后重试...")
                 time.sleep(wait_min * 60)
                 failed = self.run_check_flow()
                 if not failed:
                     break
             if failed:
-                logger.error("多次重试后仍有任务失败，放弃。")
+                self.log("多次重试后仍有任务失败，放弃。")
 
 # ===========================
 # 5. 程序入口
