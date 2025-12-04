@@ -1,12 +1,43 @@
 {
+    "locations": [
+        {
+            "name": "Default Location",
+            "lat": "30.0",
+            "lng": "120.0",
+            "acc": "0"
+        }
+    ],
+    "accounts": [
+        {
+            "name": "Default Account",
+            "class_id": "test_class",
+            "cookie": "test_cookie",
+            "pwd": ""
+        }
+    ],
+    "tasks": [
+        {
+            "account_name": "Default Account",
+            "location_name": "Default Location",
+            "enable": true
+        }
+    ],
+    "scheduletime": "",
+    "wecom": {
+        "corpid": "test_corp",
+        "secret": "test_secret",
+        "agentid": "test_agent",
+        "touser": "@all"
+    },
+    "pushplus": "",
     "class": "",
     "lat": "",
     "lng": "",
     "acc": "",
-    "time": 0,
     "cookie": [],
-    "scheduletime": "",
-    "pushplus": "",
+    "pwd": "",
+    "users": [],
+    "time": 0,
     "debug": false,
-    "configLock": false
+    "configLock": true
 }

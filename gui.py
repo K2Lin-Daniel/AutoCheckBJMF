@@ -685,9 +685,20 @@ class BJMFApp:
 
     def _scheduled_job(self):
         """The job to be executed by the scheduler."""
+        threading.Thread(target=self._run_job_thread, daemon=True).start()
+
+    def _run_job_thread(self):
+        """
+        Background thread for scheduled job to avoid blocking the scheduler loop
+        (and thus the countdown timer).
+        """
         self.log_callback(f"[{datetime.now().strftime('%H:%M:%S')}] Starting scheduled check-in...")
-        self.checkin_manager.run_job()
-        self.log_callback(f"[{datetime.now().strftime('%H:%M:%S')}] Scheduled check-in finished.")
+        try:
+            self.checkin_manager.run_job()
+            self.log_callback(f"[{datetime.now().strftime('%H:%M:%S')}] Scheduled check-in finished.")
+        except Exception as e:
+            self.log_callback(f"Error during scheduled job: {e}")
+            logger.error(traceback.format_exc())
 
     def _scheduler_loop(self):
         """The background loop that keeps the scheduler running."""
