@@ -9,12 +9,29 @@ import schedule
 from bs4 import BeautifulSoup
 from datetime import datetime
 
+"""
+Core module for AutoCheckBJMF.
+
+This module contains the core logic for the application, including configuration management,
+API interaction, and task scheduling/execution.
+"""
+
 # ===========================
 # 1. 日志与工具模块
 # ===========================
 
 def setup_logger(debug=False):
-    """配置日志，输出到控制台，并支持简单的脱敏处理"""
+    """
+    Configure logging for the application.
+
+    Sets up a logger to output to the console with a specific format.
+
+    Args:
+        debug (bool): If True, sets logging level to DEBUG. Otherwise, INFO.
+
+    Returns:
+        logging.Logger: The configured logger instance.
+    """
     level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(
         level=level,
@@ -26,7 +43,16 @@ def setup_logger(debug=False):
 logger = setup_logger()
 
 def mask_str(s, show_len=4):
-    """对敏感字符串进行脱敏处理"""
+    """
+    Mask sensitive strings for display in logs.
+
+    Args:
+        s (str): The string to mask.
+        show_len (int): The number of characters to show at the start and end.
+
+    Returns:
+        str: The masked string (e.g., "abcd***wxyz").
+    """
     if not s or len(s) <= show_len * 2:
         return "***"
     return f"{s[:show_len]}***{s[-show_len:]}"
@@ -36,11 +62,32 @@ def mask_str(s, show_len=4):
 # ===========================
 
 class ConfigManager:
+    """
+    Manages application configuration.
+
+    Loads configuration from 'config.json' and environment variables, prioritizing environment variables.
+    Handles migration from older configuration formats.
+    """
     def __init__(self, config_path="config.json"):
+        """
+        Initialize the ConfigManager.
+
+        Args:
+            config_path (str): Path to the configuration file. Defaults to "config.json".
+        """
         self.config_path = config_path
         self.data = self._load_config()
 
     def _load_config(self):
+        """
+        Load configuration from file and environment variables.
+
+        Merges defaults, file configuration, and environment variables.
+        Also handles data migration from v1 and v2 config structures.
+
+        Returns:
+            dict: The loaded configuration dictionary.
+        """
         # 默认配置
         config = {
             "locations": [], # List of {name, lat, lng, acc}
@@ -178,14 +225,38 @@ class ConfigManager:
         return config
 
     def _extract_username_static(self, cookie):
-        """静态工具方法：提取用户名"""
+        """
+        Static helper to extract username from a cookie string.
+
+        Args:
+            cookie (str): The cookie string.
+
+        Returns:
+            str: The extracted username or "User" if not found.
+        """
         match = re.search(r'username=([^;]+)', cookie)
         return match.group(1) if match else "User"
 
     def get(self, key, default=None):
+        """
+        Get a configuration value.
+
+        Args:
+            key (str): The configuration key to retrieve.
+            default (Any, optional): The default value if the key is missing.
+
+        Returns:
+            Any: The configuration value or the default.
+        """
         return self.data.get(key, default)
 
     def save_config(self, new_data):
+        """
+        Save configuration updates to the file.
+
+        Args:
+            new_data (dict): A dictionary of configuration keys and values to update.
+        """
         self.data.update(new_data)
         try:
             with open(self.config_path, 'w', encoding='utf-8') as f:
@@ -198,12 +269,23 @@ class ConfigManager:
 # ===========================
 
 class BJMFClient:
-    """负责与服务器进行 HTTP 交互，不包含业务调度逻辑"""
+    """
+    Client for interacting with the Class Cube (BJMF) server.
+
+    Handles HTTP requests, session management, and parsing server responses.
+    """
     SERVER = "k8n.cn"
     # 模拟微信内置浏览器 UA
     UA = "Mozilla/5.0 (Linux; Android 12; PAL-AL00 Build/HUAWEIPAL-AL00; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/116.0.0.0 Mobile Safari/537.36 XWEB/1160065 MMWEBSDK/20231202 MMWEBID/1136 MicroMessenger/8.0.47.2560(0x28002F35) WeChat/arm64 Weixin NetType/4G Language/zh_CN ABI/arm64"
 
     def __init__(self, cookie, class_id):
+        """
+        Initialize the BJMFClient.
+
+        Args:
+            cookie (str): The user's authentication cookie.
+            class_id (str): The class ID to check tasks for.
+        """
         self.cookie = cookie
         self.class_id = class_id
         self.session = requests.Session()
@@ -212,10 +294,25 @@ class BJMFClient:
         self.username = self._extract_username(cookie)
 
     def _extract_username(self, cookie):
+        """
+        Extract the username from the cookie.
+
+        Args:
+            cookie (str): The cookie string.
+
+        Returns:
+            str: The extracted username or "Unknown".
+        """
         match = re.search(r'username=([^;]+)', cookie)
         return match.group(1) if match else "Unknown"
 
     def _get_headers(self):
+        """
+        Generate HTTP headers for requests.
+
+        Returns:
+            dict: A dictionary of HTTP headers including User-Agent and Cookie.
+        """
         return {
             "User-Agent": self.UA,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/wxpic,image/tpg,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -227,7 +324,16 @@ class BJMFClient:
         }
 
     def fetch_tasks(self):
-        """获取所有未签到的任务ID"""
+        """
+        Fetch all pending check-in task IDs.
+
+        Scrapes the course page to find check-in cards that are not yet marked as "Signed".
+
+        Returns:
+            list: A list of task ID strings if successful.
+            None: If the session/cookie is invalid.
+            list: An empty list if no tasks are found or an error occurs.
+        """
         url = f"http://{self.SERVER}/student/course/{self.class_id}/punchs"
         try:
             r = self.session.get(url, timeout=15)
@@ -257,7 +363,19 @@ class BJMFClient:
             return []
 
     def execute_sign(self, sign_id, lat, lng, acc, pwd=""):
-        """执行单个签到请求"""
+        """
+        Execute a single check-in request.
+
+        Args:
+            sign_id (str): The ID of the check-in task.
+            lat (str/float): Latitude for the check-in.
+            lng (str/float): Longitude for the check-in.
+            acc (str/float): Accuracy of the location.
+            pwd (str, optional): Password for password-protected check-ins. Defaults to "".
+
+        Returns:
+            str: The result message from the server (e.g., "Success", error message).
+        """
         url = f"http://{self.SERVER}/student/punchs/course/{self.class_id}/{sign_id}"
         data = {
             "id": sign_id,
@@ -282,12 +400,34 @@ class BJMFClient:
 # ===========================
 
 class CheckInManager:
+    """
+    Manages the check-in process logic.
+
+    Coordinates configuration, client execution, and notifications.
+    """
     def __init__(self, config_manager, log_callback=None):
+        """
+        Initialize the CheckInManager.
+
+        Args:
+            config_manager (ConfigManager): The configuration manager instance.
+            log_callback (callable, optional): A callback function for logging messages (e.g., for GUI updates).
+        """
         self.cfg = config_manager
         self.log_callback = log_callback
 
     def _get_jittered_location(self, lat, lng, acc):
-        """获取带随机抖动的坐标"""
+        """
+        Get coordinates with random jitter added to simulate real GPS fluctuations.
+
+        Args:
+            lat (str/float): Base latitude.
+            lng (str/float): Base longitude.
+            acc (str/float): Accuracy.
+
+        Returns:
+            tuple: (jittered_lat, jittered_lng, acc)
+        """
         try:
             base_lat = float(lat)
             base_lng = float(lng)
@@ -299,6 +439,12 @@ class CheckInManager:
             return 0, 0, 0
 
     def _push_notify(self, content):
+        """
+        Send a notification via WeCom (Enterprise WeChat) or PushPlus.
+
+        Args:
+            content (str): The message content to send.
+        """
         wecom = self.cfg.get("wecom", {})
         corpid = wecom.get("corpid")
         secret = wecom.get("secret")
@@ -346,6 +492,13 @@ class CheckInManager:
             logger.warning(f"推送异常: {e}")
 
     def _push_pushplus(self, token, content):
+        """
+        Send a notification via PushPlus (fallback method).
+
+        Args:
+            token (str): The PushPlus token.
+            content (str): The message content.
+        """
         url = 'http://www.pushplus.plus/send'
         data = {
             "token": token,
@@ -359,16 +512,32 @@ class CheckInManager:
             logger.warning(f"PushPlus 推送失败: {e}")
 
     def log(self, msg):
+        """
+        Log a message to the logger and the optional callback.
+
+        Args:
+            msg (str): The message to log.
+        """
         logger.info(msg)
         if self.log_callback:
             self.log_callback(msg)
 
     def run_job(self):
-        """适配 GUI 的统一入口 (等同于 run_with_retries)"""
+        """
+        Adapter method for job execution, equivalent to calling run_with_retries.
+        """
         self.run_with_retries()
 
     def run_check_flow(self):
-        """执行一次完整的检查流程（遍历所有启用任务）"""
+        """
+        Execute a complete check-in flow for all enabled tasks.
+
+        Iterates through tasks, fetches pending check-ins, performs them,
+        and sends notifications.
+
+        Returns:
+            bool: True if any task failed and needs retry, False otherwise.
+        """
         self.log("--- 开始执行签到任务 ---")
 
         tasks = self.cfg.get("tasks", [])
@@ -446,7 +615,11 @@ class CheckInManager:
         return needs_retry
 
     def run_with_retries(self):
-        """带重试机制的运行入口"""
+        """
+        Run the check-in flow with a retry mechanism.
+
+        If the initial run has failures, it will retry after 5 and 15 minutes.
+        """
         # 初次运行
         failed = self.run_check_flow()
         

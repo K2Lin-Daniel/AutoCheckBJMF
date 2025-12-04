@@ -10,6 +10,13 @@ import os
 from datetime import datetime, timedelta
 from core import ConfigManager, CheckInManager
 
+"""
+GUI module for AutoCheckBJMF.
+
+This module provides a graphical user interface using the Flet framework
+to manage configuration (accounts, locations, tasks) and monitor check-in status.
+"""
+
 # Configure logging to file for debugging GUI startup issues
 # We use force=True because core.py might have already configured logging
 logging.basicConfig(
@@ -21,7 +28,19 @@ logging.basicConfig(
 logger = logging.getLogger("GUI")
 
 class BJMFApp:
+    """
+    The main application class for the AutoCheckBJMF GUI.
+
+    Manages the application state, UI components, and interactions between
+    the user and the core logic (ConfigManager, CheckInManager).
+    """
     def __init__(self, page: ft.Page):
+        """
+        Initialize the BJMFApp.
+
+        Args:
+            page (ft.Page): The Flet page object.
+        """
         self.page = page
         self.config_manager = ConfigManager()
         self.checkin_manager = CheckInManager(self.config_manager, log_callback=self.log_callback)
@@ -43,6 +62,9 @@ class BJMFApp:
         self.start_scheduler()
 
     def setup_page(self):
+        """
+        Configure general page properties such as title, theme, and window size.
+        """
         self.page.title = "AutoCheckBJMF - Class Cube"
         self.page.theme_mode = ft.ThemeMode.SYSTEM
         self.page.theme = ft.Theme(color_scheme_seed=ft.colors.PINK)
@@ -53,6 +75,11 @@ class BJMFApp:
         self.page.padding = 0
 
     def build_ui(self):
+        """
+        Construct the main user interface structure.
+
+        Sets up the navigation rail and the content area with an AnimatedSwitcher.
+        """
         # Views
         self.views = [
             self.build_dashboard_view(),
@@ -123,6 +150,12 @@ class BJMFApp:
         )
 
     def on_nav_change(self, e):
+        """
+        Handle navigation rail selection changes.
+
+        Args:
+            e (ft.ControlEvent): The event object.
+        """
         self.current_view_index = e.control.selected_index
         self.content_area.content = self.views[self.current_view_index]
         self.content_area.update()
@@ -137,6 +170,12 @@ class BJMFApp:
 
     # --- Dashboard ---
     def build_dashboard_view(self):
+        """
+        Build the Dashboard view.
+
+        Returns:
+            ft.Container: The container holding dashboard controls.
+        """
         return ft.Container(
             padding=20,
             content=ft.Column([
@@ -184,6 +223,14 @@ class BJMFApp:
         )
 
     def log_callback(self, message):
+        """
+        Callback for handling log messages from the core logic.
+
+        Updates the UI log list with colored messages based on content.
+
+        Args:
+            message (str): The log message.
+        """
         color = ft.colors.ON_SURFACE
         if any(x in message for x in ["❌", "失败", "Error", "无效", "Exception"]):
             color = ft.colors.ERROR
@@ -202,15 +249,25 @@ class BJMFApp:
             pass # Page might be closed
 
     def clear_logs(self):
+        """Clear the log list in the UI."""
         self.log_list.controls.clear()
         self.log_list.update()
 
     def run_manual_checkin(self, e):
+        """
+        Trigger a manual check-in run.
+
+        Disables the run button and starts a background thread.
+
+        Args:
+            e (ft.ControlEvent): The event object.
+        """
         self.run_btn.disabled = True
         self.run_btn.update()
         threading.Thread(target=self._run_checkin_thread, daemon=True).start()
 
     def _run_checkin_thread(self):
+        """Background thread worker for manual check-in execution."""
         self.log_callback(f"[{datetime.now().strftime('%H:%M:%S')}] Manual run started...")
         try:
             self.checkin_manager.run_job()
@@ -227,6 +284,12 @@ class BJMFApp:
 
     # --- Tasks ---
     def build_tasks_view(self):
+        """
+        Build the Tasks management view.
+
+        Returns:
+            ft.Container: The container holding task controls.
+        """
         self.tasks_column = ft.Column(spacing=10, scroll=ft.ScrollMode.AUTO)
         return ft.Container(
             padding=20,
@@ -241,6 +304,7 @@ class BJMFApp:
         )
 
     def refresh_tasks_list(self):
+        """Refreshes the list of tasks displayed in the UI."""
         self.tasks_column.controls.clear()
         tasks = self.config_manager.get("tasks", [])
 
@@ -272,6 +336,12 @@ class BJMFApp:
         self.tasks_column.update()
 
     def open_add_task_dialog(self, e):
+        """
+        Open the dialog to add a new task.
+
+        Args:
+            e (ft.ControlEvent): The event object.
+        """
         accs = self.config_manager.get("accounts", [])
         locs = self.config_manager.get("locations", [])
 
@@ -306,6 +376,13 @@ class BJMFApp:
         self.page.open(dlg)
 
     def toggle_task(self, idx, value):
+        """
+        Toggle the enabled state of a task.
+
+        Args:
+            idx (int): The index of the task.
+            value (bool): The new enabled state.
+        """
         tasks = self.config_manager.get("tasks", [])
         if 0 <= idx < len(tasks):
             tasks[idx]["enable"] = value
@@ -313,6 +390,12 @@ class BJMFApp:
             self.refresh_tasks_list()
 
     def delete_task(self, idx):
+        """
+        Delete a task.
+
+        Args:
+            idx (int): The index of the task to delete.
+        """
         tasks = self.config_manager.get("tasks", [])
         if 0 <= idx < len(tasks):
             del tasks[idx]
@@ -321,6 +404,12 @@ class BJMFApp:
 
     # --- Accounts ---
     def build_accounts_view(self):
+        """
+        Build the Accounts management view.
+
+        Returns:
+            ft.Container: The container holding account controls.
+        """
         self.accounts_column = ft.Column(spacing=10, scroll=ft.ScrollMode.AUTO)
         return ft.Container(
             padding=20,
@@ -335,6 +424,7 @@ class BJMFApp:
         )
 
     def refresh_accounts_list(self):
+        """Refreshes the list of accounts displayed in the UI."""
         self.accounts_column.controls.clear()
         accounts = self.config_manager.get("accounts", [])
         for idx, acc in enumerate(accounts):
@@ -361,6 +451,12 @@ class BJMFApp:
         self.accounts_column.update()
 
     def open_account_dialog(self, idx):
+        """
+        Open the dialog to add or edit an account.
+
+        Args:
+            idx (int): The index of the account to edit, or -1 to add a new account.
+        """
         accounts = self.config_manager.get("accounts", [])
         is_edit = idx >= 0
         data = accounts[idx] if is_edit else {}
@@ -396,6 +492,12 @@ class BJMFApp:
         self.page.open(dlg)
 
     def delete_account(self, idx):
+        """
+        Delete an account.
+
+        Args:
+            idx (int): The index of the account to delete.
+        """
         accounts = self.config_manager.get("accounts", [])
         if 0 <= idx < len(accounts):
             del accounts[idx]
@@ -404,6 +506,12 @@ class BJMFApp:
 
     # --- Locations ---
     def build_locations_view(self):
+        """
+        Build the Locations management view.
+
+        Returns:
+            ft.Container: The container holding location controls.
+        """
         self.locations_column = ft.Column(spacing=10, scroll=ft.ScrollMode.AUTO)
         return ft.Container(
             padding=20,
@@ -418,6 +526,7 @@ class BJMFApp:
         )
 
     def refresh_locations_list(self):
+        """Refreshes the list of locations displayed in the UI."""
         self.locations_column.controls.clear()
         locations = self.config_manager.get("locations", [])
         for idx, loc in enumerate(locations):
@@ -444,6 +553,12 @@ class BJMFApp:
         self.locations_column.update()
 
     def open_location_dialog(self, idx):
+        """
+        Open the dialog to add or edit a location.
+
+        Args:
+            idx (int): The index of the location to edit, or -1 to add a new location.
+        """
         locations = self.config_manager.get("locations", [])
         is_edit = idx >= 0
         data = locations[idx] if is_edit else {}
@@ -479,6 +594,12 @@ class BJMFApp:
         self.page.open(dlg)
 
     def delete_location(self, idx):
+        """
+        Delete a location.
+
+        Args:
+            idx (int): The index of the location to delete.
+        """
         locations = self.config_manager.get("locations", [])
         if 0 <= idx < len(locations):
             del locations[idx]
@@ -487,6 +608,12 @@ class BJMFApp:
 
     # --- Settings ---
     def build_settings_view(self):
+        """
+        Build the Settings view.
+
+        Returns:
+            ft.Container: The container holding settings controls.
+        """
         # We need to rebuild these inputs when the view is created to ensure they have latest values
         wecom = self.config_manager.get("wecom", {})
 
@@ -518,6 +645,12 @@ class BJMFApp:
         )
 
     def save_settings(self, e):
+        """
+        Save the global settings to configuration.
+
+        Args:
+            e (ft.ControlEvent): The event object.
+        """
         new_conf = {
             "scheduletime": self.tf_sched.value,
             "wecom": {
@@ -534,10 +667,12 @@ class BJMFApp:
 
     # --- Scheduler Logic ---
     def start_scheduler(self):
+        """Start the background scheduler thread."""
         self.update_scheduler_job()
         threading.Thread(target=self._scheduler_loop, daemon=True).start()
 
     def update_scheduler_job(self):
+        """Update the scheduled job based on the current configuration."""
         schedule.clear()
         time_str = self.config_manager.get("scheduletime", "08:00")
         try:
@@ -549,11 +684,13 @@ class BJMFApp:
         self.status_text.update()
 
     def _scheduled_job(self):
+        """The job to be executed by the scheduler."""
         self.log_callback(f"[{datetime.now().strftime('%H:%M:%S')}] Starting scheduled check-in...")
         self.checkin_manager.run_job()
         self.log_callback(f"[{datetime.now().strftime('%H:%M:%S')}] Scheduled check-in finished.")
 
     def _scheduler_loop(self):
+        """The background loop that keeps the scheduler running."""
         while True:
             schedule.run_pending()
             # Update countdown
@@ -561,6 +698,7 @@ class BJMFApp:
             time.sleep(1)
 
     def _update_countdown(self):
+        """Calculate and update the countdown timer to the next scheduled run."""
         time_str = self.config_manager.get("scheduletime")
         if not time_str:
             return
@@ -582,6 +720,12 @@ class BJMFApp:
             pass
 
 def main(page: ft.Page):
+    """
+    The entry point for the Flet application.
+
+    Args:
+        page (ft.Page): The Flet page object.
+    """
     try:
         BJMFApp(page)
     except Exception as e:
