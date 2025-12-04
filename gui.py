@@ -967,5 +967,18 @@ def main(page: ft.Page):
     AutoCheckApp(page)
 
 if __name__ == "__main__":
+# 1. 必须放在最第一行，用于支持 PyInstaller 的多进程打包
     multiprocessing.freeze_support()
+
+    # 2. 关键修复：在 --noconsole 模式下，sys.stdout 和 sys.stderr 是 None。
+    # 任何库如果尝试 print() 都会导致程序崩溃并引发无限重启。
+    # 我们将它们重定向到 os.devnull (相当于丢弃输出) 或者一个日志文件。
+    if getattr(sys, 'frozen', False):
+        # 仅在打包后执行此操作
+        if sys.stdout is None:
+            sys.stdout = open(os.devnull, 'w')
+        if sys.stderr is None:
+            sys.stderr = open(os.devnull, 'w')
+
+    # 3. 启动 Flet 应用
     ft.app(target=main)
