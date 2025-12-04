@@ -576,6 +576,10 @@ class CheckInManager:
         loc_map = {l["name"]: l for l in locations}
         acc_map = {a["name"]: a for a in accounts}
 
+        # Cache clients to avoid recreating sessions for the same account
+        # Key: (cookie, class_id) -> client instance
+        client_cache = {}
+
         for task in tasks:
             if not task.get("enable", True):
                 continue
@@ -597,13 +601,22 @@ class CheckInManager:
                 self.log(f"账号 [{acc_name}] 配置不完整 (缺少Cookie或ClassID)，跳过")
                 continue
 
-            client = BJMFClient(cookie, class_id)
+            # Use cached client or create new one
+            client_key = (cookie, class_id)
+            if client_key not in client_cache:
+                client_cache[client_key] = BJMFClient(cookie, class_id)
+
+            client = client_cache[client_key]
+
             self.log(f"正在执行任务: [{acc_name}] @ [{loc_name}]")
 
             pending_tasks = client.fetch_tasks()
             
             if pending_tasks is None:
-                push_messages.append(f"任务 {acc_name}: Cookie 失效 ❌")
+                # Avoid duplicate error messages for the same account in one run
+                msg = f"任务 {acc_name}: Cookie 失效 ❌"
+                if msg not in push_messages:
+                    push_messages.append(msg)
                 continue
             
             if not pending_tasks:
