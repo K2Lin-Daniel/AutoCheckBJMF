@@ -13,10 +13,11 @@ from datetime import datetime
 # 1. 日志与工具模块
 # ===========================
 
-def setup_logger():
+def setup_logger(debug=False):
     """配置日志，输出到控制台，并支持简单的脱敏处理"""
+    level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(
-        level=logging.INFO,
+        level=level,
         format='%(asctime)s - [%(levelname)s] - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
@@ -468,22 +469,22 @@ class CheckInManager:
 if __name__ == "__main__":
     # 初始化配置
     config = ConfigManager()
-    job = AutoCheckJob(config)
+    manager = CheckInManager(config)
     
     # 检查是否在 GitHub Actions 或其他 CI 环境
     is_ci = os.environ.get("GITHUB_ACTIONS") or os.environ.get("CI")
     
     if is_ci:
         logger.info("检测到 CI 环境，运行一次后退出")
-        job.run_with_retries()
+        manager.run_with_retries()
     else:
         schedule_time = config.get("scheduletime", "08:00")
         logger.info(f"本地模式启动，定时任务已设定为: {schedule_time}")
         
         # 立即运行一次测试
-        # job.run_with_retries() 
+        # manager.run_with_retries()
         
-        schedule.every().day.at(schedule_time).do(job.run_with_retries)
+        schedule.every().day.at(schedule_time).do(manager.run_with_retries)
         
         while True:
             schedule.run_pending()
